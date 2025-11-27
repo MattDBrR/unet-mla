@@ -12,7 +12,7 @@ class UNetDataset(Dataset):
                 self, 
                 data_path: str,
                 augment: bool = True,
-                test: bool = False,
+                mode: str = 'train',
                 p_flip_h: float = 0.5, 
                 p_flip_v: float = 0.5,
                 max_degree: float = 15.0, 
@@ -20,10 +20,13 @@ class UNetDataset(Dataset):
                 elastic_sigma: int = 10,
                 elastic_grid: int = 3):
         
-        self.data_path = data_path 
-        img_roots = [data_path+'/01',data_path+'/02']
+        self.data_path = data_path + f'/{mode}'
+        img_roots = [self.data_path+'/01',self.data_path+'/02']
+
+        test = mode == 'test'
+
         if not test:
-            mask_roots = [data_path+'/01_GT/SEG',data_path+'/02_GT/SEG']
+            mask_roots = [self.data_path+'/01_GT/SEG',self.data_path+'/02_GT/SEG']
         else:
             mask_roots = None
 
@@ -76,7 +79,7 @@ class UNetDataset(Dataset):
         return len(self.samples)
 
     def _resize_pair(self, image, mask = None, size=(572,572)):
-        image = TF.resize(image, size)
+        image = TF.resize(image, size, interpolation=transforms.InterpolationMode.BILINEAR)
         if mask is not None:
             mask  = TF.resize(mask, size, interpolation=transforms.InterpolationMode.NEAREST)
 
@@ -173,14 +176,11 @@ class UNetDataset(Dataset):
             
         image = torch.from_numpy(image).float()
         if mask is not None:
-            mask  = torch.from_numpy(mask)
+            mask  = torch.from_numpy(mask).float()
             if mask.ndim == 2:
                 mask = mask.unsqueeze(0)
         
         image = image / 255.0
-        if mask is not None:
-            mask = mask.long()
-
         if image.ndim == 2:
             image = image.unsqueeze(0)   # (1,H,W)
         elif image.ndim == 3:
@@ -196,7 +196,8 @@ class UNetDataset(Dataset):
             image = self._random_photometric(image)
 
         if mask is not None:
-            mask = mask.squeeze(0).long()
+            mask = mask.squeeze(0)
+            mask = (mask > 0).float()
         return image,mask
     
 
