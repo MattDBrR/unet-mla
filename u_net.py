@@ -1,11 +1,13 @@
 import torch.nn as nn
 import torch
+import torch.nn.functional as F
 
 class UNet_mla(nn.Module):
-    def __init__(self):
-        super(UNet_mla,self).__init__()
+    def __init__(self, in_channels=1, out_channels=1):
+        super().__init__()
         
-        self.lvl1D = self._get_seq_unet(1,64)
+        self.lvl1D = self._get_seq_unet(in_channels=in_channels,
+                                        out_channels=64)
         self.lvl2D = self._get_seq_unet(64,128)
         self.lvl3D = self._get_seq_unet(128,256)
         self.lvl4D = self._get_seq_unet(256,512)
@@ -20,12 +22,15 @@ class UNet_mla(nn.Module):
         self.up3 = nn.ConvTranspose2d(512, 256, kernel_size=2, stride=2)
         self.up2 = nn.ConvTranspose2d(256, 128, kernel_size=2, stride=2)
         self.up1 = nn.ConvTranspose2d(128, 64,  kernel_size=2, stride=2)
-
+    
+            
         self.last = nn.Conv2d(in_channels = 64,
-                              out_channels = 2,
+                              out_channels = out_channels,
                               kernel_size = 1)
         
         self.pool = nn.MaxPool2d(2)
+
+        self.apply(self._init_weights)
 
 
 
@@ -80,13 +85,29 @@ class UNet_mla(nn.Module):
 
         return skip[:,:,top:bottom,left:right]
 
-    def _get_seq_unet(self,in_channels,out_channels):
-        return nn.Sequential(
-            nn.Conv2d(in_channels = in_channels, out_channels= out_channels,
-                      kernel_size=3),
-            nn.ReLU(),
-            nn.Conv2d(in_channels = out_channels, out_channels= out_channels,
-                      kernel_size=3),
-            nn.ReLU()
-        )
+    def _get_seq_unet(self,in_channels,out_channels,batch_norm=True):
+        if not batch_norm:
+            return nn.Sequential(
+                nn.Conv2d(in_channels = in_channels, out_channels= out_channels,
+                        kernel_size=3),
+                nn.ReLU(inplace = True),
+                nn.Conv2d(in_channels = out_channels, out_channels= out_channels,
+                        kernel_size=3),
+                nn.ReLU(inplace=True)
+            )
+        else:
+            return nn.Sequential(
+                nn.Conv2d(in_channels, out_channels, kernel_size=3, bias=False),
+                nn.BatchNorm2d(out_channels),
+                nn.ReLU(inplace=True),
+                nn.Conv2d(out_channels, out_channels, kernel_size=3, bias=False),
+                nn.BatchNorm2d(out_channels),
+                nn.ReLU(inplace=True),
+            )
+    
+    def _init_weights(self, m):
+        if isinstance(m, nn.Conv2d):
+            nn.init.kaiming_normal_(m.weight, mode='fan_in', nonlinearity='relu')
+            if m.bias is not None:
+                nn.init.constant_(m.bias, 0)
 
