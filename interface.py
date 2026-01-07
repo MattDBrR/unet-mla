@@ -153,19 +153,18 @@ class Interface:
         w_map = self._center_crop_to(w_map, H, W)
         
         if self.out_channels == 1:
-            # Para BCE: necesitamos [B, 1, H, W]
+            # BCE: [B, 1, H, W]
             mask = mask.float()
             if mask.ndim == 3:
                 mask = mask.unsqueeze(1)
             if w_map.ndim == 3:
                 w_map = w_map.unsqueeze(1)
             
-            # Normalizar mask si es necesario
             if mask.max() > 1.0:
                 mask = mask / 255.0
         
         else:  # out_channels == 2
-            # Para CrossEntropy: necesitamos [B, H, W] long
+            # CrossEntropy: [B, H, W] long
             mask = mask.long()
             if mask.ndim == 4:
                 mask = mask.squeeze(1)  # Quitar canal
@@ -233,7 +232,7 @@ class Interface:
         if not torch.is_tensor(x):
             x = torch.as_tensor(x)
 
-        # asegurar (B,H,W)
+        # (B,H,W)
         if x.ndim == 2:
             x = x.unsqueeze(0)
         elif x.ndim == 4:

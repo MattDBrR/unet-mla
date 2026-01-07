@@ -1,43 +1,8 @@
 import torch
 import torch.nn as nn
-import torch.nn.functional as F
-
-from torch.nn import BCEWithLogitsLoss
-
-class CombinedLoss(nn.Module):
-    def __init__(self, dice_weight=0.8, bce_weight=0.2):
-        super().__init__()
-        self.dice_weight = dice_weight
-        self.bce_weight = bce_weight
-        self.bce = nn.BCEWithLogitsLoss()
-    
-    def dice_loss(self, pred, target, smooth=1e-6):
-        pred = torch.sigmoid(pred)
-
-        pred = pred.contiguous()
-        target = target.contiguous()
-        
-        pred_flat = pred.reshape(-1)
-        target_flat = target.reshape(-1)
-        
-        intersection = (pred_flat * target_flat).sum()
-        union = pred_flat.sum() + target_flat.sum()
-        
-        dice = (2. * intersection + smooth) / (union + smooth)
-        return 1 - dice
-    
-    def forward(self, pred, target):
-        dice = self.dice_loss(pred, target)
-        bce = self.bce(pred, target)
-        return self.dice_weight * dice + self.bce_weight * bce
-    
-
-
+import torch.nn.functional as F 
 
 #generated
-import torch
-import torch.nn as nn
-
 class BCEDiceLoss(nn.Module):
     def __init__(self, bce_weight=0.5, dice_weight=0.5, pos_weight=None, eps=1e-6):
         super().__init__()

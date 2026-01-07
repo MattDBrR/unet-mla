@@ -125,35 +125,21 @@ class UNetDataset(Dataset):
     
     #got from git
     def compute_unet_weight_map(self, mask, wc=None, w0=10, sigma=5):
-        """
-        Genera el Weight Map.
-        Corrección: Ahora incluye wc (pesos de clase) para balancear objeto vs fondo.
-        """
-        # Si no se pasan pesos, definimos por defecto que el objeto (1) pesa más
+
         if wc is None:
             wc = {
-                0: 1,  # Fondo
-                1: 5   # Objeto (Interior de la célula)
+                0: 1,  # background
+                1: 5   # object
             }
 
-        # 1. GENERAR MAPA DE PESOS BASE (wc)
-        # En lugar de np.ones_like, usamos los valores de wc
         weight_map = np.zeros_like(mask, dtype=np.float32)
         
-        # Asignamos el peso correspondiente a cada píxel según si es fondo (0) u objeto (1)
         for k, v in wc.items():
-            # mask == k selecciona los pixeles de esa clase
             weight_map[mask == k] = v 
 
-        # ---------------------------------------------------------
-        # 2. CALCULAR PESOS DE BORDE (w0 * exp(...))
-        # (Esta parte de tu código estaba bien, la mantenemos igual)
-        
         labeled_mask, num_cells = label(mask, return_num=True, connectivity=2)
 
         if num_cells < 2:
-            # Si hay menos de 2 células, no hay "fronteras" entre células que separar.
-            # Devolvemos solo el mapa de pesos de clase.
             return weight_map
 
         h, w = mask.shape
@@ -161,52 +147,19 @@ class UNetDataset(Dataset):
 
         for i in range(num_cells):
             current_cell = (labeled_mask == (i + 1))
-            # Distancia euclidiana inversa
             dmap = distance_transform_edt(1 - current_cell.astype(int))
             distance_maps[:, :, i] = dmap
 
-        # Ordenar para obtener d1 y d2
         distance_maps.sort(axis=2)
         d1 = distance_maps[:, :, 0]
         d2 = distance_maps[:, :, 1]
         
-        # Calcular la pérdida de borde
         border_loss = w0 * np.exp(-((d1 + d2)**2) / (2 * sigma**2))
         
-        # Aplicar borde SOLO al fondo (mask == 0), sumándolo al peso base
         weight_map = weight_map + (border_loss * (mask == 0))
         
         return weight_map.astype(np.float32)
     
-    def _elastic_transform_paired(image, label, sigma=10, random_state=None):
-        if random_state is None:
-            random_state = np.random.RandomState(None)
-
-        h, w = image.shape[:2]
-        
-        grid_size = 3
-        grid_x = random_state.normal(0, sigma, size=(grid_size, grid_size))
-        grid_y = random_state.normal(0, sigma, size=(grid_size, grid_size))
-
-        yi = np.linspace(0, grid_size - 1, h)
-        xi = np.linspace(0, grid_size - 1, w)
-        xy_grid = np.meshgrid(yi, xi, indexing='ij')
-
-        dx = ndimage.map_coordinates(grid_x, xy_grid, order=3, mode='reflect')
-        dy = ndimage.map_coordinates(grid_y, xy_grid, order=3, mode='reflect')
-
-        Y, X = np.meshgrid(np.arange(h), np.arange(w), indexing='ij')
-        indices = [Y + dy, X + dx]
-
-        image_warped = ndimage.map_coordinates(
-            image, indices, order=1, mode='reflect'
-        )
-
-        label_warped = ndimage.map_coordinates(
-            label, indices, order=0, mode='reflect'
-        )
-
-        return image_warped, label_warped
 
     def elastic_transform_triplet(self,image, label, weight_map, sigma=10, random_state=None):
         """

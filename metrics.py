@@ -2,6 +2,7 @@ import torch
 import numpy as np
 from typing import Union
 
+#generated
 class SegmentationMetrics:
     def __init__(self, threshold: float = 0.5, eps: float = 1e-7):
         self.threshold = threshold
