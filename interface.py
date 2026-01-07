@@ -6,8 +6,8 @@ from unet_dataset import UNetDataset, DatasetName
 from torch.utils.data import DataLoader
 from loss_functions import *
 from torch.optim.lr_scheduler import ReduceLROnPlateau
-
-from enum import Enum
+import torch.nn.functional as F
+import matplotlib.pyplot as plt
 
 from metrics import * 
 
@@ -43,7 +43,8 @@ class Interface:
         augment: bool = True,
         device: str = "cuda",
         metrics_thr: int = 0.5,
-        original_mode: bool = True
+        original_mode: bool = True,
+        plot: bool = True
     ):
         
         self.original_mode = original_mode
@@ -227,7 +228,6 @@ class Interface:
 
         raise ValueError(f"x must be 2D/3D/4D, got ndim={x.ndim}")
     
-    import torch.nn.functional as F
 
     def _pad_or_crop_center(self, x, H, W, mode="reflect"):
         if not torch.is_tensor(x):
@@ -319,6 +319,7 @@ class Interface:
             val_losses.append(val_loss)
             val_ious.append(val_metrics_avg['iou'])
 
+            
             if self.val_split > 0:
                 self.scheduler.step(val_loss)
             else: 
@@ -327,7 +328,9 @@ class Interface:
             current_lr = self.optimizer.param_groups[0]["lr"]
             print(f"LR now: {current_lr:.2e}")
             
-            
+            if self.val_split == 0:
+                val_loss = train_loss
+
             if val_loss < self.best_loss:
                 self.best_loss = val_loss
                 self._save_best(epoch=epoch, val_loss=val_loss)
@@ -339,14 +342,65 @@ class Interface:
             print("-" * 30)
             print(f"Epoch {epoch+1}/{self.epochs}")
             print(f"Train loss: {train_loss:.6f}")
-            print(f"Val   loss: {val_loss:.6f}")
+            if self.val_split > 0:
+                print(f"Val   loss: {val_loss:.6f}")
             print("-" * 30)
 
+
+        print('TRAINING FINISHED')
         #save last
         self._save_best(epoch,val_loss,'last')
         print(f"Last model saved (val loss = {val_loss:.4f})")
 
+        if self.plot:
+            os.makedirs('plots', exist_ok=True)
 
+            fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(12, 4))
+
+            ax1.plot(train_losses, label='Train Loss')
+            if self.val_split > 0: 
+                ax1.plot(val_losses, label='Val Loss')
+
+            ax1.set_xlabel('Epoch')
+            ax1.set_ylabel('Loss')
+            ax1.legend()
+            ax1.set_title('Training Progress')
+
+
+            ax2.plot(train_ious, label='Train IoU')
+
+            if self.val_split > 0:
+                ax2.plot(val_ious, label='Val IoU')
+            
+            if self.dataset_name == DatasetName.DIC_HELA:
+                y = 0.7756
+            elif self.dataset_name == DatasetName.PHC_U373:
+                y = 0.9203
+            
+            if self.dataset_name != DatasetName.EM_SEG:
+                ax2.axhline(y=y, color='r', linestyle='--', label=f'U-Net Paper ({y*100}%)')
+            ax2.set_xlabel('Epoch')
+            ax2.set_ylabel('IoU')
+            ax2.legend()
+            ax2.set_title(f'IoU Progress (Target: {y*100}%)')
+
+            fig.savefig(
+                f"plots/{self.dataset_name}_training_progress.png",
+                dpi=300,
+                bbox_inches="tight"
+            )
+
+            fig.savefig(
+                f"plots/{self.dataset_name}_training_progress.eps",
+                format="eps",
+                bbox_inches="tight"
+            )
+
+            plt.show()
+
+            plt.close(fig)
+
+        
         return train_losses,val_losses,train_ious,val_ious
 
     @torch.no_grad()
@@ -357,7 +411,7 @@ class Interface:
         val_running_loss = 0
         self.val_metrics.reset()
 
-        for img,mask,w_map in tqdm(self.val_dataloader, desc='Val',leave=False):
+        for img,mask,w_map in self.val_dataloader:
             img = img.float().to(self.device,non_blocking = True)
             mask = mask.float().to(self.device,non_blocking = True)
             w_map = w_map.float().to(self.device,non_blocking = True)
@@ -384,19 +438,19 @@ class Interface:
         return val_loss, val_metrics_avg
     
     @torch.no_grad()
-    def predict_proba(self, img):
-        """
-        img: [B,1,H,W] float tensor
-        returns: probs [B,1,H,W] aligned with model output spatial size
-        """
-        self.model_instance.eval()
-        img = img.float().to(self.device)
-        logits = self.model_instance(img)
-        return torch.sigmoid(logits)
+    def predict_proba(self,img):
+        with torch.no_grad():
+            img_n = img.unsqueeze(0).float().to(self.device)
 
-    @torch.no_grad()
-    def predict_mask(self, img, thr=0.5):
-        probs = self.predict_proba(img)
-        return (probs > thr).float()
+            logits = self.model_instance(img_n)      # [1,1,H,W]
+            H, W = logits.shape[-2:]
+            prob = torch.sigmoid(logits)[0,0].cpu()
+            prob = (prob < 0.5).numpy().astype(np.uint8)
 
 
+        img_cut = self._pad_or_crop_center(img, H, W, mode="reflect")
+        mask_cut = self._pad_or_crop_center(prob, H, W, mode="reflect")
+
+
+        return img_cut, mask_cut
+    
