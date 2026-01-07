@@ -2,3 +2,5 @@ data
 test*
 __pycache__/
 notas.txt
+weights
+*.png

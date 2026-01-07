@@ -3,8 +3,17 @@ import torch
 import torch.nn.functional as F
 
 class UNet_mla(nn.Module):
-    def __init__(self, in_channels=1, out_channels=1):
+    def __init__(self, 
+                 in_channels: int =1,
+                 out_channels: int =2, 
+                 original: bool = True,
+                 dropout: bool = True):
         super().__init__()
+
+        self.original = original
+        self.in_channels = in_channels
+        self.out_channels = out_channels
+        self.dropoutB = dropout
         
         self.lvl1D = self._get_seq_unet(in_channels=in_channels,
                                         out_channels=64)
@@ -12,6 +21,9 @@ class UNet_mla(nn.Module):
         self.lvl3D = self._get_seq_unet(128,256)
         self.lvl4D = self._get_seq_unet(256,512)
         self.lvl5D = self._get_seq_unet(512,1024)
+
+        if dropout:
+            self.dropout = nn.Dropout2d(p = 0.5)
         
         self.lvl1U = self._get_seq_unet(1024,512)
         self.lvl2U = self._get_seq_unet(512,256)
@@ -28,7 +40,7 @@ class UNet_mla(nn.Module):
                               out_channels = out_channels,
                               kernel_size = 1)
         
-        self.pool = nn.MaxPool2d(2)
+        self.pool = nn.MaxPool2d(kernel_size=2,stride=2)
 
         self.apply(self._init_weights)
 
@@ -38,32 +50,34 @@ class UNet_mla(nn.Module):
 
         x1 = self.lvl1D(x)
         p1 = self.pool(x1)
+
         x2 = self.lvl2D(p1)
         p2 = self.pool(x2)
+
         x3 = self.lvl3D(p2)
         p3 = self.pool(x3)
+
         x4 = self.lvl4D(p3)
         p4 = self.pool(x4)
+
         x5 = self.lvl5D(p4)
+        if self.dropoutB:
+            x5 = self.dropout(x5)
 
         u4 = self.up4(x5)
-        x4c = self._crop(x4,u4)
-        cat4 = torch.cat([x4c,u4],dim=1)
+        cat4 = self._crop_and_concat(x4,u4)
         y4 = self.lvl1U(cat4)
 
         u3 = self.up3(y4)
-        x3c = self._crop(x3,u3)
-        cat3 = torch.cat([x3c,u3],dim=1)
+        cat3 = self._crop_and_concat(x3,u3)
         y3 = self.lvl2U(cat3)
 
         u2 = self.up2(y3)
-        x2c = self._crop(x2,u2)
-        cat2 = torch.cat([x2c,u2],dim=1)
+        cat2 = self._crop_and_concat(x2,u2)
         y2 = self.lvl3U(cat2)
 
         u1 = self.up1(y2)
-        x1c = self._crop(x1,u1)
-        cat1 = torch.cat([x1c,u1],dim=1)
+        cat1 = self._crop_and_concat(x1,u1)
         y1 = self.lvl4U(cat1)
 
         y = self.last(y1)
@@ -71,39 +85,37 @@ class UNet_mla(nn.Module):
         return y
 
 
-    def _crop(self, skip,target):
-        B, C, Hs, Ws = list(skip.size())
-        B, C2, Ht, Wt = list(target.size())
-
-        dh = Hs - Ht
-        dw = Ws - Wt
-
-        top = dh//2
-        left = dw//2
-        bottom = top + Ht 
-        right = left + Wt 
-
-        return skip[:,:,top:bottom,left:right]
-
-    def _get_seq_unet(self,in_channels,out_channels,batch_norm=True):
-        if not batch_norm:
-            return nn.Sequential(
-                nn.Conv2d(in_channels = in_channels, out_channels= out_channels,
-                        kernel_size=3),
-                nn.ReLU(inplace = True),
-                nn.Conv2d(in_channels = out_channels, out_channels= out_channels,
-                        kernel_size=3),
-                nn.ReLU(inplace=True)
-            )
+    def _crop_and_concat(self, encoder_feature, decoder_feature):
+        if self.original:
+            # Center crop
+            _, _, H_enc, W_enc = encoder_feature.shape
+            _, _, H_dec, W_dec = decoder_feature.shape
+            
+            crop_h = (H_enc - H_dec) // 2
+            crop_w = (W_enc - W_dec) // 2
+            
+            encoder_cropped = encoder_feature[
+                :, :, 
+                crop_h:crop_h + H_dec, 
+                crop_w:crop_w + W_dec
+            ]
         else:
-            return nn.Sequential(
-                nn.Conv2d(in_channels, out_channels, kernel_size=3, bias=False),
-                nn.BatchNorm2d(out_channels),
-                nn.ReLU(inplace=True),
-                nn.Conv2d(out_channels, out_channels, kernel_size=3, bias=False),
-                nn.BatchNorm2d(out_channels),
-                nn.ReLU(inplace=True),
-            )
+            encoder_cropped = encoder_feature
+
+        return torch.cat([encoder_cropped, decoder_feature], dim=1)
+
+    def _get_seq_unet(self,in_channels,out_channels):
+        padding = 0 if self.original else 1
+
+        # we add batchnorm even if the paper doesn't mention it
+        return nn.Sequential(
+            nn.Conv2d(in_channels, out_channels, kernel_size=3, padding=padding, bias=False),
+            nn.BatchNorm2d(out_channels),
+            nn.ReLU(inplace=True),
+            nn.Conv2d(out_channels, out_channels, kernel_size=3, padding=padding, bias=False),
+            nn.BatchNorm2d(out_channels),
+            nn.ReLU(inplace=True),
+        )
     
     def _init_weights(self, m):
         if isinstance(m, nn.Conv2d):

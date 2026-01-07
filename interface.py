@@ -2,10 +2,12 @@ import torch
 import torch.nn as nn
 from torch.optim import AdamW
 from u_net import UNet_mla
-from unet_dataset import UNetDataset
+from unet_dataset import UNetDataset, DatasetName
 from torch.utils.data import DataLoader
 from loss_functions import *
 from torch.optim.lr_scheduler import ReduceLROnPlateau
+
+from enum import Enum
 
 from metrics import * 
 
@@ -19,6 +21,7 @@ device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 torch.manual_seed(2025)
 if torch.cuda.is_available():
     torch.cuda.manual_seed(2025)
+
 
 
 class Interface:
@@ -35,12 +38,15 @@ class Interface:
         val_split: float = 0.2,
         num_workers: int = 4,
         data_path: str = "data",
+        dataset_name: DatasetName = DatasetName.DIC_HELA,
         load_model_path: str | None = None,
         augment: bool = True,
         device: str = "cuda",
-        metrics_thr: int = 0.5
+        metrics_thr: int = 0.5,
+        original_mode: bool = True
     ):
         
+        self.original_mode = original_mode
         self.device = torch.device(device if torch.cuda.is_available() else "cpu")
         
         self.out_channels = out_channels
@@ -51,11 +57,16 @@ class Interface:
         self.learning_rate = learning_rate
         self.weight_decay = weight_decay
         self.optimizer_class = optimizer
-        self.save_model_path = save_model_path
+
+        self.save_model_path = os.path.join(save_model_path, dataset_name)
         self.val_split = val_split
         self.num_workers = num_workers
+
+        data_path = data_path
+
         self.data_path = data_path
         self.augment = augment
+        self.dataset_name = dataset_name
 
         os.makedirs(self.save_model_path, exist_ok=True)
         
@@ -70,9 +81,9 @@ class Interface:
     
         # Dataset and dataloader
         g = torch.Generator().manual_seed(2025)
-        self.full_dataset = UNetDataset(self.data_path, augment=self.augment, mode='train')
-        self.dataset_test = UNetDataset(self.data_path, mode='test')
-        full_dataset_val = UNetDataset(self.data_path, augment=False, mode='train')
+        self.full_dataset = UNetDataset(self.data_path, dataset_name=dataset_name,augment=self.augment, mode='train')
+        self.dataset_test = UNetDataset(self.data_path, dataset_name=dataset_name, mode='test')
+        full_dataset_val = UNetDataset(self.data_path, dataset_name=dataset_name,augment=False, mode='train')
 
 
         val_size = int(len(self.full_dataset) * val_split)
@@ -133,6 +144,8 @@ class Interface:
         self.train_metrics = MetricsTracker()
         self.val_metrics = MetricsTracker()
 
+    
+
     def _prep_mask_and_wmap(self, mask, w_map, H, W):
         # Center-crop
         mask = self._center_crop_to(mask, H, W)
@@ -160,17 +173,32 @@ class Interface:
         
         return mask, w_map
         
-    def _save_best(self, epoch, val_loss):
+    def _save_best(self, epoch, val_loss,name='best'):
         os.makedirs(self.save_model_path, exist_ok=True)
-        path = os.path.join(self.save_model_path, "best.pt")
+        path = os.path.join(self.save_model_path, name+".pt")
         torch.save(
             {
                 "epoch": epoch,
                 "model_state": self.model_instance.state_dict(),
                 "optimizer_state": self.optimizer.state_dict(),
                 "val_loss": float(val_loss),
+                'scheduler_state': self.scheduler.state_dict()
             },
             path,
+        )
+
+    def _load_model(self,path):
+        checkpoint = torch.load(
+            path,
+            map_location=self.device
+        )
+        self.model_instance.load_state_dict(checkpoint["model_state"])
+        self.optimizer.load_state_dict(checkpoint["optimizer_state"])
+        self.scheduler.load_state_dict(checkpoint["scheduler_state"])
+
+        print(
+            f"Loaded best model from epoch {checkpoint['epoch']} "
+            f"(val loss = {checkpoint['val_loss']:.4f})"
         )
 
 
@@ -198,6 +226,44 @@ class Interface:
             return x[top:top+H_out, left:left+W_out]
 
         raise ValueError(f"x must be 2D/3D/4D, got ndim={x.ndim}")
+    
+    import torch.nn.functional as F
+
+    def _pad_or_crop_center(self, x, H, W, mode="reflect"):
+        if not torch.is_tensor(x):
+            x = torch.as_tensor(x)
+
+        # asegurar (B,H,W)
+        if x.ndim == 2:
+            x = x.unsqueeze(0)
+        elif x.ndim == 4:
+            x = x[:, 0]
+
+        _, h, w = x.shape
+
+        # --- PAD ---
+        pad_h = max(0, H - h)
+        pad_w = max(0, W - w)
+
+        if pad_h > 0 or pad_w > 0:
+            pad_top    = pad_h // 2
+            pad_bottom = pad_h - pad_top
+            pad_left   = pad_w // 2
+            pad_right  = pad_w - pad_left
+
+            x = F.pad(
+                x,
+                (pad_left, pad_right, pad_top, pad_bottom),
+                mode=mode
+            )
+
+        # --- CROP (por si quedó más grande) ---
+        _, h, w = x.shape
+        top  = (h - H) // 2
+        left = (w - W) // 2
+
+        return x[:, top:top+H, left:left+W]
+
 
 
     
@@ -226,7 +292,12 @@ class Interface:
                 logits = model(img)
                 H, W = logits.shape[-2:]
 
-                mask_cut, w_map_cut = self._prep_mask_and_wmap(mask, w_map, H, W)
+                #mask_cut, w_map_cut = self._prep_mask_and_wmap(mask, w_map, H, W)
+                mask_cut = self._pad_or_crop_center(mask, H, W, mode="reflect")
+                w_map_cut = self._pad_or_crop_center(w_map, H, W, mode="reflect")
+
+                mask_cut = (mask_cut > 0).long()
+
                 loss = self.criterion(logits, mask_cut, w_map_cut)
 
                 self.optimizer.zero_grad(set_to_none=True)
@@ -248,17 +319,33 @@ class Interface:
             val_losses.append(val_loss)
             val_ious.append(val_metrics_avg['iou'])
 
-            self.scheduler.step(val_loss)
+            if self.val_split > 0:
+                self.scheduler.step(val_loss)
+            else: 
+                self.scheduler.step(train_loss)
+
+            current_lr = self.optimizer.param_groups[0]["lr"]
+            print(f"LR now: {current_lr:.2e}")
+            
             
             if val_loss < self.best_loss:
                 self.best_loss = val_loss
                 self._save_best(epoch=epoch, val_loss=val_loss)
+
+                print(f"Best model saved (val loss = {val_loss:.4f})")
+
+            
 
             print("-" * 30)
             print(f"Epoch {epoch+1}/{self.epochs}")
             print(f"Train loss: {train_loss:.6f}")
             print(f"Val   loss: {val_loss:.6f}")
             print("-" * 30)
+
+        #save last
+        self._save_best(epoch,val_loss,'last')
+        print(f"Last model saved (val loss = {val_loss:.4f})")
+
 
         return train_losses,val_losses,train_ious,val_ious
 
@@ -278,8 +365,12 @@ class Interface:
             logits = model(img)
             H,W = logits.shape[-2:]
 
-            mask_cut, w_map_cut = self._prep_mask_and_wmap(mask, w_map, H, W)
+            #mask_cut, w_map_cut = self._prep_mask_and_wmap(mask, w_map, H, W)
+            mask_cut = self._pad_or_crop_center(mask, H, W, mode="reflect")
+            w_map_cut = self._pad_or_crop_center(w_map, H, W, mode="reflect")
 
+            mask_cut = (mask_cut > 0).long()
+            
             loss = self.criterion(logits, mask_cut, w_map_cut)
 
             val_running_loss += loss.item()

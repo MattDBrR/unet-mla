@@ -11,12 +11,20 @@ from scipy.ndimage import zoom, map_coordinates
 import matplotlib.pyplot as plt
 from scipy.ndimage.morphology import distance_transform_edt
 from skimage.measure import label
+import cv2
+from enum import Enum
 
+
+class DatasetName(str, Enum):
+    DIC_HELA= 'dic-hela'
+    EM_SEG = 'em-seg'
+    PHC_U373 = 'phc-u373'
 
 class UNetDataset(Dataset): 
     def __init__(
                 self, 
-                data_path: str,
+                data_path: str = 'data',
+                dataset_name: DatasetName = DatasetName.DIC_HELA,
                 augment: bool = True,
                 mode: str = 'train',
                 p_flip_h: float = 0.5, 
@@ -24,29 +32,60 @@ class UNetDataset(Dataset):
                 max_degree: float = 15.0, 
                 max_shift_px: int = 28,
                 elastic_sigma: int = 10,
-                elastic_grid: int = 3):
+                elastic_grid: int = 3,
+                original_mode: bool = True):
         
+        data_path = os.path.join(data_path,dataset_name)
+        #data_path = data_path + dataset_name
+        print('Dataset in ',data_path)
+
         self.data_path = data_path + f'/{mode}'
-        img_roots = [self.data_path+'/01',self.data_path+'/02']
+        self.dataset_name = dataset_name
+
+        if not dataset_name == DatasetName.EM_SEG:
+            img_roots = [self.data_path+'/01',self.data_path+'/02']
+        else:
+            img_roots = [self.data_path + '/imgs']
+
+        
 
         test = mode == 'test'
 
+        self.original_mode = original_mode
+        self.context = 96 #lost pixels
+
+
         if not test:
-            mask_roots = [self.data_path+'/01_GT/SEG',self.data_path+'/02_GT/SEG']
+            if  dataset_name != DatasetName.EM_SEG:
+                mask_roots = [self.data_path+'/01_GT/SEG',self.data_path+'/02_GT/SEG']
+            else:
+                mask_roots = [self.data_path + '/labels']
         else:
             mask_roots = None
 
         self.samples = []
 
-        for i in range(2):
+        nb_folders = len(img_roots)
+
+        for i in range(nb_folders):
             img_root = img_roots[i]
             if not test:
                 mask_root = mask_roots[i]
-                masks = sorted([f for f in os.listdir(mask_root) if f.endswith(".tif")])
+
+                if dataset_name == DatasetName.EM_SEG:
+                    masks = sorted([f for f in os.listdir(mask_root) if f.endswith(".jpg")])
+                else:
+                    masks = sorted([f for f in os.listdir(mask_root) if f.endswith(".tif")])
 
                 for mask_name in masks:
-                    id = mask_name.replace("man_seg","").replace(".tif","")
-                    img_name = 't'+id+'.tif'
+                    if dataset_name == DatasetName.EM_SEG:
+                        id = mask_name.replace("train-labels","").replace(".jpg","")
+                        img_name = 'train-volume'+id+'.jpg'
+                        
+                    else:
+                        id = mask_name.replace("man_seg","").replace(".tif","")
+                        img_name = 't'+id+'.tif'
+
 
                     img_path = os.path.join(img_root,img_name)
                     mask_path = os.path.join(mask_root,mask_name)
@@ -55,7 +94,11 @@ class UNetDataset(Dataset):
                         self.samples.append((img_path,mask_path))
             else:
                 img_root = img_roots[i]
-                imgs = sorted([f for f in os.listdir(img_root) if f.endswith(".tif")])
+                if dataset_name == DatasetName.EM_SEG:
+                    imgs = sorted([f for f in os.listdir(img_root) if f.endswith(".jpg")])
+                    
+                else:
+                    imgs = sorted([f for f in os.listdir(img_root) if f.endswith(".tif")])
                 
                 for img_name in imgs:
                     img_path = os.path.join(img_root,img_name)
@@ -74,32 +117,10 @@ class UNetDataset(Dataset):
         self.elastic_sigma = elastic_sigma
         self.elastic_grid = elastic_grid
 
-        
         self.test = test
                  
     def __len__(self):
         return len(self.samples)
-
-    def _resize_pair(self, image, mask=None, size=(572, 572)):
-        if image.ndim == 2:
-            image = image.unsqueeze(0)
-        
-        image = TF.resize(
-            image, size,
-            interpolation=transforms.InterpolationMode.BILINEAR,
-            antialias=True
-        )
-
-        if mask is not None:
-            if mask.ndim == 2:
-                mask = mask.unsqueeze(0)
-            mask = TF.resize(
-                mask, size,
-                interpolation=transforms.InterpolationMode.NEAREST
-            )
-            mask = mask.squeeze(0)
-
-        return image, mask
 
     
     #got from git
@@ -229,26 +250,29 @@ class UNetDataset(Dataset):
             img_path = self.samples[idx]
             mask_path = None
 
-        image = tiff.imread(img_path) 
+        image = cv2.imread(img_path,cv2.IMREAD_UNCHANGED) 
+        #image = cv2.cvtColor(image,cv2.COLOR_BGR2RGB)
 
         if mask_path is not None:
-            mask  = tiff.imread(mask_path)
+            mask  = cv2.imread(mask_path,cv2.IMREAD_UNCHANGED)
+            if 'em-seg' in self.data_path:
+                mask = (mask > 127).astype(np.uint8)
+            #else:
+            #    mask = (mask > 0).astype(np.uint8)
+
+
         else:
             mask = None
 
-        if self.augment and mask is not None:
+        if mask is not None:
             w_map = self.compute_unet_weight_map(mask)
-            if np.random.rand() > 0.5:
-                print('Applying transformation')
-                image,mask,w_map = self.elastic_transform_triplet(image,mask,w_map,
-                                                              sigma=self.elastic_sigma)
 
-
+            if self.augment and np.random.rand() > 0.5:
+                image, mask, w_map = self.elastic_transform_triplet(
+                    image, mask, w_map, sigma=self.elastic_sigma
+                )
         else:
-            if mask is not None:
-                w_map = self.compute_unet_weight_map(mask)
-            else:
-                w_map = None
+            w_map = None
 
         image = torch.from_numpy(image).float()
 
@@ -260,30 +284,24 @@ class UNetDataset(Dataset):
         elif image.ndim == 3:
             image = image.permute(2,0,1)  # (C,H,W)
 
-        if mask is not None:
-            mask  = torch.from_numpy(mask).float()
-            w_map = torch.from_numpy(w_map).float()
-
-        image, mask = self._resize_pair(image, mask,size=(572,572))
-
-        if w_map is not None:
-            w_map = w_map.unsqueeze(0)  # (1, H, W) para resize
-            w_map = TF.resize(
-                w_map, 
-                size=(572, 572),
-                interpolation=transforms.InterpolationMode.BILINEAR,
-                antialias=True
-            )
-            w_map = w_map.squeeze(0)
-
+        context = self.context  # 92
+        image = F.pad(
+            image,
+            pad=(context, context, context, context),
+            mode="reflect"
+        )
 
         if self.test:
             return image
 
-        mask = (mask > 0).long()
 
-        return image,mask,w_map
-    
+        mask = (torch.from_numpy(mask).long() > 0).long()
+
+
+        w_map = torch.from_numpy(w_map).float()
+
+        return image, mask, w_map
+            
 
 
 
