@@ -55,8 +55,16 @@ pip install git+https://www.github.com/mouseland/cellpose.git
 ```
 Once installed, the script can be run directly on your images and masks folder by editing the paths in the script:
 
+```bash
+image_folder = "choose your path/images"
+mask_folder  = "choose your path/masks"
+```
+
+--- 
+
 ### Notes
 
 The script converts Cellpose instance segmentation masks to binary masks for fair comparison with standard U-Net or other segmentation outputs.
 
 Evaluation metrics used are Dice coefficient and IoU (Intersection over Union).
+
