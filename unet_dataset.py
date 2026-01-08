@@ -129,7 +129,7 @@ class UNetDataset(Dataset):
         if wc is None:
             wc = {
                 0: 1,  # background
-                1: 5   # object
+                1: 1   # object
             }
 
         weight_map = np.zeros_like(mask, dtype=np.float32)
@@ -204,6 +204,7 @@ class UNetDataset(Dataset):
             mask_path = None
 
         image = cv2.imread(img_path,cv2.IMREAD_UNCHANGED) 
+        #image = (image > 0).astype(int)
         #image = cv2.cvtColor(image,cv2.COLOR_BGR2RGB)
 
         if mask_path is not None:
@@ -219,6 +220,9 @@ class UNetDataset(Dataset):
 
         if mask is not None:
             w_map = self.compute_unet_weight_map(mask)
+            assert not np.isnan(w_map).any(), f"NaN in w_map at idx {idx}"
+            assert not np.isinf(w_map).any(), f"Inf in w_map at idx {idx}"
+            assert w_map.min() >= 0, f"Negative weights at idx {idx}"
 
             if self.augment and np.random.rand() > 0.5:
                 image, mask, w_map = self.elastic_transform_triplet(

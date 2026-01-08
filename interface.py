@@ -46,7 +46,7 @@ class Interface:
         original_mode: bool = True,
         plot: bool = True
     ):
-        
+        self.plot = plot
         self.original_mode = original_mode
         self.device = torch.device(device if torch.cuda.is_available() else "cpu")
         
@@ -134,7 +134,8 @@ class Interface:
             self.optimizer,
             mode="min",
             factor=0.5,
-            patience=5,
+            patience=15,
+            min_lr=1e-7,
         )
         self.best_loss = np.inf
 
@@ -256,7 +257,7 @@ class Interface:
                 mode=mode
             )
 
-        # --- CROP (por si quedó más grande) ---
+        # --- CROP  ---
         _, h, w = x.shape
         top  = (h - H) // 2
         left = (w - W) // 2
@@ -284,7 +285,7 @@ class Interface:
 
             for idx,img_mask_w in enumerate(tqdm(self.train_dataloader,position=0,leave=True)):
                 img = img_mask_w[0].float().to(self.device,non_blocking=True)
-                mask = img_mask_w[1].float().to(self.device,non_blocking=True)
+                mask = img_mask_w[1].long().to(self.device,non_blocking=True)
                 w_map = img_mask_w[2].float().to(self.device,non_blocking=True)
 
 
@@ -378,10 +379,14 @@ class Interface:
             
             if self.dataset_name != DatasetName.EM_SEG:
                 ax2.axhline(y=y, color='r', linestyle='--', label=f'U-Net Paper ({y*100}%)')
+                ax2.set_title(f'IoU Progress (Target: {y*100}%)')
+            else:
+                ax2.set_title(f'IoU Progress')
+
+            
             ax2.set_xlabel('Epoch')
             ax2.set_ylabel('IoU')
             ax2.legend()
-            ax2.set_title(f'IoU Progress (Target: {y*100}%)')
 
             fig.savefig(
                 f"plots/{self.dataset_name}_training_progress.png",
@@ -410,9 +415,9 @@ class Interface:
         val_running_loss = 0
         self.val_metrics.reset()
 
-        for img,mask,w_map in self.val_dataloader:
+        for batch_idx,(img,mask,w_map) in enumerate(self.val_dataloader):
             img = img.float().to(self.device,non_blocking = True)
-            mask = mask.float().to(self.device,non_blocking = True)
+            mask = mask.long().to(self.device,non_blocking = True)
             w_map = w_map.float().to(self.device,non_blocking = True)
 
             logits = model(img)
@@ -437,18 +442,23 @@ class Interface:
         return val_loss, val_metrics_avg
     
     @torch.no_grad()
-    def predict_proba(self,img):
-        with torch.no_grad():
-            img_n = img.unsqueeze(0).float().to(self.device)
+    def predict_proba(self, img, threshold=0.1, postprocess=True, return_prob=False):
 
-            logits = self.model_instance(img_n)      # [1,1,H,W]
-            H, W = logits.shape[-2:]
-            prob = torch.sigmoid(logits)[0,0].cpu()
-            prob = (prob < 0.5).numpy().astype(np.uint8)
-
+        img_n = img.unsqueeze(0).float().to(self.device)
+        logits = self.model_instance(img_n)
+        H, W = logits.shape[-2:]
+        
+        if self.out_channels > 1:
+            probs = F.softmax(logits, dim=1)
+            prob_fg = probs[0, 1].cpu().numpy() 
+            pred = (prob_fg > threshold).astype(np.uint8)  
+        else:
+            prob_fg = torch.sigmoid(logits)[0, 0].cpu().numpy()
+            pred = (prob_fg > threshold).astype(np.uint8)
+            
 
         img_cut = self._pad_or_crop_center(img, H, W, mode="reflect")
-        mask_cut = self._pad_or_crop_center(prob, H, W, mode="reflect")
+        mask_cut = self._pad_or_crop_center(pred, H, W, mode="reflect")
 
 
         return img_cut, mask_cut
