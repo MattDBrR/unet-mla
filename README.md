@@ -1,42 +1,18 @@
-# unet-mla
+# Cellpose Segmentation and Evaluation Script
 
-Equipe : Aya, Konstantinos, Joel & Matthieu
+## English
 
-# Project Setup Instructions
+This script uses **Cellpose**, a deep learning model based on **U-Net**, with additional layers for instance segmentation.
 
-## Required Data and Weights
+Cellpose generates **instance segmentation masks** for microscopy images. To fairly compare Cellpose predictions with a standard U-Net or other segmentation methods, the masks are converted to **binary masks** (0 = background, 1 = cells). This ensures a fair comparison regardless of different instance labels or extra outputs.
 
-To run this project correctly, you must download and place the required **data** and **trained model weights** in the appropriate folders.
+### What the script does
 
-### 1. Data Folder
-
-You must have a folder named **`data`** at the root of the project.
-
-Download the data from the following Google Drive link:
-
-🔗 https://drive.google.com/drive/folders/1zp8QdZq_mJDJMflOxZE_pubzlaoaFu_p?usp=sharing
-
-
-### 2. Weights Folder
-
-You must also have a folder named **`weights`** containing the pretrained models.
-
-Download the trained models from:
-
-🔗 https://drive.google.com/drive/folders/1KUyPzjYjcPor9kpNOiWYp_6CqYbiDid6?usp=sharing
-
-
-## Notes
-
-- Make sure the folder names are exactly **`data`** and **`weights`**.
-- Do not rename files inside these folders unless you also update the code accordingly.
-- Both folders must be present before training or evaluation.
-
-Once these folders are in place, you are ready to run the project.
-
-
-
-
-
-
-
+1. Loads all images and the corresponding ST/SEG masks from a folder.
+2. Runs Cellpose segmentation on each image.
+3. Converts the Cellpose masks into binary masks.
+4. Compares the binary masks with the ground truth masks for each image.
+5. Computes two evaluation metrics:
+   - **Dice coefficient**: Measures overlap between predicted and ground truth masks.
+   - **IoU (Intersection over Union)**: Measures the ratio of intersection over union of masks.
+6. Stores the metrics in lists and computes the **average score** across all images.
