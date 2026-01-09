@@ -1,4 +1,4 @@
-# U-Net Multi-Layer Attention (unet-mla)
+# U-Net : Convolutional Networks for Biomedical Image Segmentation
 
 **Team:** Aya, Konstantinos, Joel & Matthieu
 
