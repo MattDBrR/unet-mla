@@ -7,13 +7,15 @@ class UNet_mla(nn.Module):
                  in_channels: int =1,
                  out_channels: int =2, 
                  original: bool = True,
-                 dropout: bool = True):
+                 dropout: bool = True,
+                 skip_connections: bool = True):
         super().__init__()
 
         self.original = original
         self.in_channels = in_channels
         self.out_channels = out_channels
         self.dropoutB = dropout
+        self.skip_connections = skip_connections
         
         self.lvl1D = self._get_seq_unet(in_channels=in_channels,
                                         out_channels=64)
@@ -25,11 +27,11 @@ class UNet_mla(nn.Module):
         if dropout:
             self.dropout = nn.Dropout2d(p = 0.5)
         
-        self.lvl1U = self._get_seq_unet(1024,512)
-        self.lvl2U = self._get_seq_unet(512,256)
-        self.lvl3U = self._get_seq_unet(256,128)
-        self.lvl4U = self._get_seq_unet(128,64)
-
+        self.lvl1U = self._get_seq_unet(1024 if skip_connections else 512, 512)
+        self.lvl2U = self._get_seq_unet(512 if skip_connections else 256, 256)
+        self.lvl3U = self._get_seq_unet(256 if skip_connections else 128, 128)
+        self.lvl4U = self._get_seq_unet(128 if skip_connections else 64, 64)
+        
         self.up4 = nn.ConvTranspose2d(1024, 512, kernel_size=2, stride=2)
         self.up3 = nn.ConvTranspose2d(512, 256, kernel_size=2, stride=2)
         self.up2 = nn.ConvTranspose2d(256, 128, kernel_size=2, stride=2)
@@ -65,19 +67,31 @@ class UNet_mla(nn.Module):
             x5 = self.dropout(x5)
 
         u4 = self.up4(x5)
-        cat4 = self._crop_and_concat(x4,u4)
+        if self.skip_connections:
+            cat4 = self._crop_and_concat(x4, u4)
+        else:
+            cat4 = u4
         y4 = self.lvl1U(cat4)
 
         u3 = self.up3(y4)
-        cat3 = self._crop_and_concat(x3,u3)
+        if self.skip_connections:
+            cat3 = self._crop_and_concat(x3, u3)
+        else:
+            cat3 = u3
         y3 = self.lvl2U(cat3)
 
         u2 = self.up2(y3)
-        cat2 = self._crop_and_concat(x2,u2)
+        if self.skip_connections:
+            cat2 = self._crop_and_concat(x2, u2)
+        else:
+            cat2 = u2
         y2 = self.lvl3U(cat2)
 
         u1 = self.up1(y2)
-        cat1 = self._crop_and_concat(x1,u1)
+        if self.skip_connections:
+            cat1 = self._crop_and_concat(x1, u1)
+        else:
+            cat1 = u1
         y1 = self.lvl4U(cat1)
 
         y = self.last(y1)

@@ -46,14 +46,6 @@ class UNetLoss(nn.Module):
         super().__init__()
     
     def forward(self, pred, target, weight_map):
-        """
-        Loss original de U-Net con weight map
-        
-        Args:
-            pred: (B, C, H, W) - logits (C=num_classes, típicamente 2)
-            target: (B, H, W) - clases ground truth (long tensor)
-            weight_map: (B, H, W) - mapa de pesos
-        """
         if target.dtype != torch.long:
             target = target.long()
 
@@ -62,11 +54,8 @@ class UNetLoss(nn.Module):
         if weight_map.ndim == 4:
             weight_map = weight_map.squeeze(1)
             
-        # Cross entropy sin reducción
         loss = F.cross_entropy(pred, target, reduction='none')  # (B, H, W)
         
-        # Aplicar weight map
         weighted_loss = loss * weight_map
         
-        # Promediar
         return weighted_loss.mean()

@@ -19,6 +19,7 @@ class DatasetName(str, Enum):
     DIC_HELA= 'dic-hela'
     EM_SEG = 'em-seg'
     PHC_U373 = 'phc-u373'
+    MIXED = 'mixed'
 
 class UNetDataset(Dataset): 
     def __init__(
@@ -42,7 +43,10 @@ class UNetDataset(Dataset):
         self.data_path = data_path + f'/{mode}'
         self.dataset_name = dataset_name
 
-        if not dataset_name == DatasetName.EM_SEG:
+        if dataset_name == DatasetName.MIXED:
+            img_roots = [self.data_path+'/01',self.data_path+'/02',
+                         self.data_path+'/03',self.data_path+'/04',self.data_path+'/05']
+        elif not dataset_name == DatasetName.EM_SEG:
             img_roots = [self.data_path+'/01',self.data_path+'/02']
         else:
             img_roots = [self.data_path + '/imgs']
@@ -56,7 +60,11 @@ class UNetDataset(Dataset):
 
 
         if not test:
-            if  dataset_name != DatasetName.EM_SEG:
+            if dataset_name == DatasetName.MIXED:
+                mask_roots = [self.data_path+'/01_GT',self.data_path+'/02_GT',
+                              self.data_path+'/03_GT',self.data_path+'/04_GT',
+                              self.data_path+'/05_GT']
+            elif  dataset_name != DatasetName.EM_SEG:
                 mask_roots = [self.data_path+'/01_GT/SEG',self.data_path+'/02_GT/SEG']
             else:
                 mask_roots = [self.data_path + '/labels']
@@ -74,6 +82,9 @@ class UNetDataset(Dataset):
 
                 if dataset_name == DatasetName.EM_SEG:
                     masks = sorted([f for f in os.listdir(mask_root) if f.endswith(".jpg")])
+                elif dataset_name == DatasetName.MIXED:
+                    masks = sorted([f for f in os.listdir(mask_root) if f.endswith(".tif") or f.endswith(".jpg")])
+
                 else:
                     masks = sorted([f for f in os.listdir(mask_root) if f.endswith(".tif")])
 
@@ -81,7 +92,13 @@ class UNetDataset(Dataset):
                     if dataset_name == DatasetName.EM_SEG:
                         id = mask_name.replace("train-labels","").replace(".jpg","")
                         img_name = 'train-volume'+id+'.jpg'
-                        
+                    elif dataset_name == DatasetName.MIXED:
+                        if i < 4:
+                            id = mask_name.replace("man_seg","").replace(".tif","")
+                            img_name = 't'+id+'.tif'
+                        else:
+                            id = mask_name.replace("train-labels","").replace(".jpg","")
+                            img_name = 'train-volume'+id+'.jpg'
                     else:
                         id = mask_name.replace("man_seg","").replace(".tif","")
                         img_name = 't'+id+'.tif'
@@ -209,8 +226,9 @@ class UNetDataset(Dataset):
 
         if mask_path is not None:
             mask  = cv2.imread(mask_path,cv2.IMREAD_UNCHANGED)
-            if 'em-seg' in self.data_path:
+            if 'em-seg' in self.data_path or ('mixed' in self.data_path and idx > 51):
                 mask = (mask > 127).astype(np.uint8)
+
             #else:
             #    mask = (mask > 0).astype(np.uint8)
 

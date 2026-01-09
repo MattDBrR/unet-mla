@@ -14,7 +14,7 @@ from metrics import *
 import numpy as np
 from tqdm import tqdm
 import os
-
+import cv2
 from torch.utils.data import random_split
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -44,14 +44,18 @@ class Interface:
         device: str = "cuda",
         metrics_thr: int = 0.5,
         original_mode: bool = True,
-        plot: bool = True
+        plot: bool = True,
+        save_val_imgs: bool = False,
+        skip_connections: bool = True
     ):
+        self.skip_connections = skip_connections
+        self.save_val_imgs = save_val_imgs
         self.plot = plot
         self.original_mode = original_mode
         self.device = torch.device(device if torch.cuda.is_available() else "cpu")
         
         self.out_channels = out_channels
-        self.model_instance = UNet_mla(out_channels=self.out_channels).to(self.device)
+        self.model_instance = UNet_mla(out_channels=self.out_channels,skip_connections=self.skip_connections).to(self.device)
         
         self.epochs = epochs
         self.batch_size = batch_size
@@ -168,7 +172,7 @@ class Interface:
             # CrossEntropy: [B, H, W] long
             mask = mask.long()
             if mask.ndim == 4:
-                mask = mask.squeeze(1)  # Quitar canal
+                mask = mask.squeeze(1)  
             if w_map.ndim == 4:
                 w_map = w_map.squeeze(1)
         
@@ -176,7 +180,7 @@ class Interface:
         
     def _save_best(self, epoch, val_loss,name='best'):
         os.makedirs(self.save_model_path, exist_ok=True)
-        path = os.path.join(self.save_model_path, name+".pt")
+        path = os.path.join(self.save_model_path, name+f"{val_loss:.4f}.pt")
         torch.save(
             {
                 "epoch": epoch,
@@ -346,6 +350,20 @@ class Interface:
                 print(f"Val   loss: {val_loss:.6f}")
             print("-" * 30)
 
+            if self.save_val_imgs:
+                img, _, _ = self.dataset_val[0]
+                img_cut, mask_cut = self.predict_proba(img)
+                folder = 'val_videos/imgs/'
+                os.makedirs(folder, exist_ok=True)
+
+                mask_cut = mask_cut.cpu().numpy()
+
+                if mask_cut.max() <= 1.0:
+                    mask_cut = (mask_cut * 255).astype('uint8')
+                else:
+                    mask_cut = mask_cut.astype('uint8') 
+
+                cv2.imwrite(os.path.join(folder, f'img{epoch}.png'), mask_cut[0])
 
         print('TRAINING FINISHED')
         #save last
@@ -438,6 +456,7 @@ class Interface:
 
         val_loss = val_running_loss / max(1, len(self.val_dataloader))
         val_metrics_avg = self.val_metrics.get_averages()
+
 
         return val_loss, val_metrics_avg
     
